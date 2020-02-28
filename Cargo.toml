@@ -1,0 +1,14 @@
+[package]
+name = "mc_update"
+version = "0.1.0"
+authors = ["u296 <u296b3g@gmail.com>"]
+edition = "2018"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+regex = "*"
+clap = "*"
+reqwest = {version = "*", features = ["blocking"]}
+select = "*"
+app_dirs = "*"
