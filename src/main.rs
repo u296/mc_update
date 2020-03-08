@@ -177,7 +177,17 @@ fn main() {
             .collect();
 
 
-        for repo in user_repos.union(&default_repos).into_iter() {
+        for repo in default_repos.iter() {
+            if repo.exists() {
+                if repo.is_dir() {
+                    existing_repos.insert(repo.clone());
+                } else {
+                    prompt_continue(&format!("the default repo '{}' appears to not be a directory", repo.display()));
+                }
+            }
+        }
+
+        for repo in user_repos.iter() {
             if repo.exists() {
                 if repo.is_dir() {
                     existing_repos.insert(repo.clone());
@@ -202,113 +212,116 @@ fn main() {
             }
         }
     }
-
-    if let Some(jar_file_path) = jar_file_path {
-        // jar file already on disk
-        println!("info: found cached jar at: {}", jar_file_path.display());
-
-        match fs::copy(jar_file_path, match create_file(&install_path.as_path().join("server.jar")) {
-            Ok(_) => {
-                let h = Path::new(".").join("server.jar");
-                h
-            }
-            Err(_) => {
-                println!("error: failed to create server.jar");
-                exit(1);
-            }
-        }) {
-            Ok(_) => {
-                println!("info: successfully installed version {}", jar_version);
-            }
-            Err(e) => {
-                println!("error: failed to install: {}", e);
+    match fs::create_dir_all(&install_path) {
+        Ok(_) => (),
+        Err(e) => match e.kind() {
+            io::ErrorKind::AlreadyExists => (),
+            _ => {
+                prompt_continue(&format!("failed to create install directory: {}", e));
             }
         }
-    } else {
-        // jar is not on disk
-        let mut install_repo = None;
+    };
 
-        let user_repos = matches.values_of("install_repo")
-            .unwrap_or_default()
-            .map(|x| PathBuf::from(x))
-            .collect::<HashSet<PathBuf>>();
+    let mut jar_content;
+    let mut cache_file_path_buffer;
 
-        for repo in user_repos.union(&default_repos).into_iter() {
-            if repo.exists() {
-                if repo.is_dir() {
-                    install_repo = Some(repo);
-                    break;
-                }
-                prompt_continue(&format!("potential install repo '{}' is not a directory", repo.display()));
-                continue;
-            } else {
-                match fs::create_dir_all(repo) {
-                    Ok(_) => {
-                        println!("info: created repo at '{}'", repo.display());
+    let target_writer: &mut dyn FileWriter = {
+        if let Some(jar_file_path) = &mut jar_file_path {
+            // jar file is on disk
+            jar_file_path
+        } else {
+            // jar file is not on disk
+            let mut install_repo = None;
+
+            let user_install_repos = matches.values_of("install_repo")
+                .unwrap_or_default()
+                .map(|x| PathBuf::from(x))
+                .collect::<HashSet<PathBuf>>();
+
+            for repo in user_install_repos.union(&default_repos).into_iter() {
+                if repo.exists() {
+                    if repo.is_dir() {
                         install_repo = Some(repo);
                         break;
                     }
-                    Err(e) => {
-                        prompt_continue(&format!("failed to create installation repo at '{}': '{}'", repo.display(), e));
+                    prompt_continue(&format!("potential install repo '{}' is not a directory", repo.display()));
+                    continue;
+                } else {
+                    match fs::create_dir_all(repo) {
+                        Ok(_) => {
+                            println!("info: created repo at '{}'", repo.display());
+                            install_repo = Some(repo);
+                            break;
+                        }
+                        Err(e) => {
+                            prompt_continue(&format!("failed to create installation repo at '{}': '{}'", repo.display(), e));
+                        }
                     }
                 }
             }
-        }
 
-        let install_repo = install_repo.expect("error: failed to select or create an install repo");
+            let install_repo = install_repo.expect("error: failed to select or create an install repo");
 
-        let target = format!("https://mcversions.net/download/{}", jar_version);
+            let target = format!("https://mcversions.net/download/{}", jar_version);
 
-        let page = match download(target.as_str(), &max_download_attempts) {
-            Some(x) => x.text().unwrap(),
-            _ => exit(1),
-        };
+            let page = match download(target.as_str(), &max_download_attempts) {
+                Some(x) => x.text().unwrap(),
+                _ => exit(1),
+            };
 
 
-        let jar_url = match Document::from(page.as_str()).find(Name("a"))
-            .filter_map(|n| { if n.attr("href")?.contains("server.jar") { Some(n.attr("href")) } else { None } })
-            .collect::<Vec<_>>().get(0) {
-            Some(link) => link.unwrap(),
+            let jar_url = match Document::from(page.as_str()).find(Name("a"))
+                .filter_map(|n| {
+                    if n.attr("href")?.contains("server.jar") {
+                        Some(n.attr("href"))
+                    } else {
+                        None
+                    }
+                })
+                .collect::<Vec<_>>()
+                .get(0) {
+                Some(link) => link.unwrap(),
 
-            _ => {
-                println!("error: no server jar available");
-                exit(1);
+                _ => {
+                    println!("error: failed to locate server jar");
+                    exit(1);
+                }
+            }.to_owned();
+
+            println!("info: server jar at '{}'", jar_url);
+
+            jar_content = match download(jar_url.as_str(), &max_download_attempts) {
+                Some(x) => x,
+                None => {
+                    println!("error: ran out of attempts to download jar");
+                    exit(1);
+                }
+            };
+
+            let tmp_writer: &mut dyn FileWriter = &mut jar_content;
+
+            cache_file_path_buffer = install_repo.join(jar_version.as_str());
+
+            match tmp_writer.write(&cache_file_path_buffer) {
+                Ok(_) => {
+                    println!("info: successfully cached jar in '{}'", install_repo.display());
+                    &mut cache_file_path_buffer
+                }
+                Err(e) => {
+                    println!("warning: failed to cache jar: {}", e);
+                    &mut jar_content
+                }
             }
         }
-            .to_owned();
+    };
 
-        println!("info: server jar at '{}'", jar_url);
-
-        let mut jar_content = match download(jar_url.as_str(), &max_download_attempts) {
-            Some(x) => x,
-            None => {
-                println!("error: ran out of attempts to download jar");
-                exit(1)
-            }
-        };
-
-        let mut cache_file_path_buffer = install_repo.join(jar_version.as_str());
-        let mut target_writer: &mut dyn FileWriter = &mut jar_content;
-
-
-        match target_writer.write(&cache_file_path_buffer) {
-            Ok(_) => {
-                target_writer = &mut cache_file_path_buffer;
-                println!("info: successfully cached jar in {}", install_repo.display());
-            }
-            Err(e) => {
-                println!("warning: failed to cache jar:  {}", e);
-            }
-        }
-
-        match target_writer.write(&install_path.join("server.jar")) {
-            Ok(_) => {
-                println!("info: successfully installed version '{}' into '{}'", jar_version, install_path.display());
-            }
-            Err(e) => {
-                println!("error: failed to install jar into '{}': {}", install_path.display(), e);
-                exit(1);
-            }
+    match target_writer.write(&install_path.join("server.jar")) {
+        Ok(_) => {
+            println!("info: successfully installed server jar with version '{}' into '{}'", jar_version, install_path.display());
+        },
+        Err(e) => {
+            println!("error: failed to install server jar into '{}': {}", install_path.display(), e);
+            exit(1);
         }
     }
 }
