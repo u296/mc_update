@@ -11,7 +11,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::process::exit;
 
-use clap::{App, Arg, value_t};
+use clap::{App, Arg};
 use regex::Regex;
 use reqwest::blocking::{get, Response};
 use select::document::Document;
@@ -137,16 +137,18 @@ fn main() {
 
     let jar_version = matches.value_of("JAR_VERSION").unwrap().to_string();
 
-    let max_download_attempts = match value_t!(matches, "max_download_attempts", usize)
-        .unwrap_or_else(|e| {
-            prompt_continue(&format!("could not interpret argument 'max_download_attempts' as a number, setting infinite limit: {}", e));
-            std::usize::MAX
-        }) {
-        std::usize::MAX => None,
-        x => Some(x),
+    let max_download_attempts = match matches.value_of("max_download_attempts") {
+        Some(s) => match s.parse::<usize>() {
+            Ok(val) => {
+                Some(val)
+            }
+            Err(e) => {
+                prompt_continue(&format!("value '{}' for argument 'max_download_attempts' could not be interpreted as a number, setting default limit (infinite): {}", s, e));
+                None
+            }
+        },
+        None => None
     };
-
-    //TODO
 
     let r = Regex::new(r#"(\.\.)|/|\\"#).unwrap();
 
@@ -154,6 +156,15 @@ fn main() {
         println!("error: jar version contains invalid characters");
         exit(1);
     }
+
+    /*
+    TODO:
+        Using hashsets here causes a problem,
+        when iterating over it, it is not guaranteed
+        to be ordered in a desirable way, for example
+        it might be prioritized to cache jars locally
+        than globally or where the user wants
+    */
 
     let local_repo_path = PathBuf::from("./mc_update");
     let global_repo_path = app_dirs::get_app_root(app_dirs::AppDataType::UserCache, &APP_INFO)
