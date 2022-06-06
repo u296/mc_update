@@ -1,6 +1,6 @@
 [package]
 name = "mc_update"
-version = "0.2.2"
+version = "0.2.3"
 authors = ["u296 <u296b3g@gmail.com>"]
 edition = "2018"
 
@@ -9,6 +9,6 @@ edition = "2018"
 [dependencies]
 regex = "1"
 clap = "2"
-reqwest = {version = "0.10", features = ["blocking"]}
-select = "0.4"
+reqwest = {version = "0.11", features = ["blocking"]}
+select = "0.5"
 app_dirs = "1"
